@@ -16,7 +16,7 @@ class TestOpenSearchClient:
         """Setup that runs before each test method."""
         # Clear any existing environment variables
         self.original_env = {}
-        for key in ['OPENSEARCH_USERNAME', 'OPENSEARCH_PASSWORD', 'AWS_REGION', 'OPENSEARCH_URL']:
+        for key in ['OPENSEARCH_USERNAME', 'OPENSEARCH_PASSWORD', 'AWS_REGION', 'OPENSEARCH_URL', 'OPENSEARCH_NO_AUTH']:
             if key in os.environ:
                 self.original_env[key] = os.environ[key]
                 del os.environ[key]
@@ -136,4 +136,27 @@ class TestOpenSearchClient:
             initialize_client(baseToolArgs())
         assert (
             str(exc_info.value) == 'No valid AWS or basic authentication provided for OpenSearch'
+        )
+
+    @patch('opensearch.client.OpenSearch')
+    def test_initialize_client_no_auth_enabled(self, mock_opensearch):
+        """Test client initialization with OPENSEARCH_NO_AUTH=true."""
+        # Set environment variables
+        os.environ['OPENSEARCH_URL'] = 'https://test-opensearch-domain.com'
+        os.environ['OPENSEARCH_NO_AUTH'] = 'true'
+
+        # Mock OpenSearch client
+        mock_client = Mock()
+        mock_opensearch.return_value = mock_client
+
+        # Execute
+        client = initialize_client(baseToolArgs())
+
+        # Assert
+        assert client == mock_client
+        mock_opensearch.assert_called_once_with(
+            hosts=['https://test-opensearch-domain.com'],
+            use_ssl=True,
+            verify_certs=True,
+            connection_class=RequestsHttpConnection,
         )
