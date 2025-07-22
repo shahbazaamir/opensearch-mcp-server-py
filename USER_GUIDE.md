@@ -10,6 +10,7 @@
 - [Authentication](#authentication)
 - [Running the Server](#running-the-server)
 - [Tool Filter](#tool-filter)
+- [Tool Customization](#tool-customization)
 - [LangChain Integration](#langchain-integration)
 
 ## Overview
@@ -99,7 +100,7 @@ See [Authentication](#authentication) section for detailed authentication setup.
       "args": [
         "opensearch-mcp-server-py",
         "--mode", "multi",
-        "--config", "/path/to/your/clusters.yml"
+        "--config", "/path/to/your/config.yml"
       ],
       "env": {}
     }
@@ -107,7 +108,7 @@ See [Authentication](#authentication) section for detailed authentication setup.
 }
 ```
 
-**Example YAML Configuration File (`clusters.yml`):**
+**Example YAML Configuration File (`config.yml`):**
 ```yaml
 version: "1.0"
 description: "OpenSearch cluster configurations"
@@ -137,6 +138,15 @@ clusters:
     profile: "your-aws-profile"
     is_serverless: true
 
+# Tool customization configurations (supported in both Single and Multi Mode)
+tools:
+  ListIndexTool:
+    display_name: "Index Manager"
+    description: "List and manage OpenSearch indices with enhanced functionality"
+  SearchIndexTool:
+    display_name: "Super Searcher"
+  GetShardsTool:
+    description: "Retrieve detailed information about OpenSearch shards"
 ```
 
 **Key Points about Multi Mode:**
@@ -346,13 +356,13 @@ python -m mcp_server_opensearch --profile my-aws-profile
 ### Multi Mode
 ```bash
 # Stdio Server with config file
-python -m mcp_server_opensearch --mode multi --config clusters.yml
+python -m mcp_server_opensearch --mode multi --config config.yml
 
 # Streaming Server with config file
-python -m mcp_server_opensearch --mode multi --config clusters.yml --transport stream
+python -m mcp_server_opensearch --mode multi --config config.yml --transport stream
 
 # With AWS Profile (fallback if not in config)
-python -m mcp_server_opensearch --mode multi --config clusters.yml --profile my-aws-profile
+python -m mcp_server_opensearch --mode multi --config config.yml --profile my-aws-profile
 
 # Fallback to single mode behavior (no config file)
 python -m mcp_server_opensearch --mode multi
@@ -436,6 +446,8 @@ When using multi-mode, each cluster in your YAML configuration file accepts the 
 
 OpenSearch MCP server supports tool filtering to disable specific tools by name, category, or operation type. You can configure filtering using either a YAML configuration file or environment variables.
 
+**Important Note: Tool filtering is only supported in Single Mode. In Multi Mode, all tools are available without any filtering.**
+
 ### Configuration Methods
 
 1. YAML Configuration File
@@ -494,6 +506,46 @@ export OPENSEARCH_SETTINGS_ALLOW_WRITE=true
 - All configuration fields are optional
 - When both config file and environment variables are provided, the config file will be prioritized
 - Tool filtering is only supported in single mode. In multi mode, tool filtering is not supported
+
+## Tool Customization
+
+OpenSearch MCP server supports tool customization to modify tool display names, descriptions, and other properties. You can customize tools using either a YAML configuration file or runtime parameters.
+
+### Configuration Methods
+
+1. **YAML Configuration File**
+
+Create a YAML file with your tool customization settings:
+```yaml
+tools:
+  ListIndexTool:
+    display_name: "Index Manager"
+    description: "List and manage OpenSearch indices"
+  GetShardsTool:
+    description: "Retrieve detailed information about OpenSearch shards"
+```
+
+Use the configuration file when starting the server:
+```bash
+python -m mcp_server_opensearch --config path/to/config.yml
+```
+
+2. **Runtime Parameters**
+
+Customize tools directly via command line arguments:
+```bash
+python -m mcp_server_opensearch --tool.ListIndexTool.display_name="Index Manager" --tool.SearchIndexTool.description="Custom search tool"
+```
+
+### Priority
+
+Runtime parameters have higher priority than configuration file settings. If both are provided, runtime parameters will override the corresponding values in the configuration file.
+
+### Important Notes
+- Tool customization is available in both single and multi modes
+- Only existing tools can be customized; new tools cannot be created
+- Changes take effect immediately when the server starts
+- Invalid tool names or properties will be ignored
 
 ## LangChain Integration
 

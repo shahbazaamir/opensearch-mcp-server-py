@@ -23,9 +23,22 @@ from opensearch.helper import (
 def check_tool_compatibility(tool_name: str, args: baseToolArgs = None):
     opensearch_version = get_opensearch_version(args)
     if not is_tool_compatible(opensearch_version, TOOL_REGISTRY[tool_name]):
-        raise Exception(
-            f'Tool {tool_name} is not supported for OpenSearch versions less than {TOOL_REGISTRY[tool_name]["min_version"]} and greater than {TOOL_REGISTRY[tool_name]["max_version"]}'
+        tool_display_name = TOOL_REGISTRY[tool_name].get('display_name', tool_name)
+        min_version = TOOL_REGISTRY[tool_name].get("min_version", "")
+        max_version = TOOL_REGISTRY[tool_name].get("max_version", "")
+
+        version_info = (
+            f"{min_version} to {max_version}" if min_version and max_version else
+            f"{min_version} or later" if min_version else
+            f"up to {max_version}" if max_version else
+            None
         )
+
+        error_message = f"Tool '{tool_display_name}' is not supported for this OpenSearch version (current version: {opensearch_version})."
+        if version_info:
+            error_message += f" Supported version: {version_info}."
+
+        raise Exception(error_message)
 
 
 async def list_indices_tool(args: ListIndicesArgs) -> list[dict]:
@@ -36,7 +49,9 @@ async def list_indices_tool(args: ListIndicesArgs) -> list[dict]:
         if args.index:
             index_info = get_index(args)
             formatted_info = json.dumps(index_info, indent=2)
-            return [{'type': 'text', 'text': f'Index information for {args.index}:\n{formatted_info}'}]
+            return [
+                {'type': 'text', 'text': f'Index information for {args.index}:\n{formatted_info}'}
+            ]
 
         # Otherwise, list all indices with full information
         indices = list_indices(args)
@@ -103,6 +118,7 @@ async def get_shards_tool(args: GetShardsArgs) -> list[dict]:
 # Registry of available OpenSearch tools with their metadata
 TOOL_REGISTRY = {
     'ListIndexTool': {
+        'display_name': 'ListIndexTool',
         'description': 'Lists all indices in the OpenSearch cluster with full information including docs.count, docs.deleted, store.size, etc. If an index parameter is provided, returns detailed information about that specific index.',
         'input_schema': ListIndicesArgs.model_json_schema(),
         'function': list_indices_tool,
@@ -111,6 +127,7 @@ TOOL_REGISTRY = {
         'http_methods': 'GET',
     },
     'IndexMappingTool': {
+        'display_name': 'IndexMappingTool',
         'description': 'Retrieves index mapping and setting information for an index in OpenSearch',
         'input_schema': GetIndexMappingArgs.model_json_schema(),
         'function': get_index_mapping_tool,
@@ -118,6 +135,7 @@ TOOL_REGISTRY = {
         'http_methods': 'GET',
     },
     'SearchIndexTool': {
+        'display_name': 'SearchIndexTool',
         'description': 'Searches an index using a query written in query domain-specific language (DSL) in OpenSearch',
         'input_schema': SearchIndexArgs.model_json_schema(),
         'function': search_index_tool,
@@ -125,6 +143,7 @@ TOOL_REGISTRY = {
         'http_methods': 'GET, POST',
     },
     'GetShardsTool': {
+        'display_name': 'GetShardsTool',
         'description': 'Gets information about shards in OpenSearch',
         'input_schema': GetShardsArgs.model_json_schema(),
         'function': get_shards_tool,
