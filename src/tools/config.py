@@ -5,50 +5,16 @@ import copy
 import logging
 import re
 import yaml
-from typing import Dict, Any, Optional, List, Tuple
+from typing import Dict, Any
 from tools.tools import TOOL_REGISTRY as default_tool_registry
-
-# Field aliases mapping: actual field name -> list of accepted aliases
-FIELD_ALIASES = {
-    'display_name': ['name', 'displayName', 'display_name', 'customName'],
-    'description': ['description', 'desc', 'customDescription'],
-}
 
 # Constants for field names
 DISPLAY_NAME_STRING = 'display_name'
 DESCRIPTION_STRING = 'description'
+ARGS_STRING = 'args'
 
 # Regex pattern for tool display name validation
 DISPLAY_NAME_PATTERN = r'^[a-zA-Z0-9_-]+$'
-
-
-def _find_actual_field(field_alias: str) -> Optional[str]:
-    """
-    Find the actual field name for a given alias.
-
-    :param field_alias: The alias to look up
-    :return: The actual field name or None if not found
-    """
-    for actual_field, aliases in FIELD_ALIASES.items():
-        if field_alias in aliases:
-            return actual_field
-    return None
-
-
-def _get_all_aliases() -> Tuple[List[str], List[str]]:
-    """
-    Get all aliases for display name and description fields.
-
-    :return: Tuple of (display_name_aliases, description_aliases)
-    """
-    all_display_name_aliases = []
-    all_description_aliases = []
-    for actual_field, aliases in FIELD_ALIASES.items():
-        if actual_field == DISPLAY_NAME_STRING:
-            all_display_name_aliases.extend(aliases)
-        elif actual_field == DESCRIPTION_STRING:
-            all_description_aliases.extend(aliases)
-    return all_display_name_aliases, all_description_aliases
 
 
 def is_valid_display_name_pattern(name: str) -> bool:
@@ -61,148 +27,93 @@ def is_valid_display_name_pattern(name: str) -> bool:
     return re.match(DISPLAY_NAME_PATTERN, name) is not None
 
 
-def _load_config_from_file(config_from_file: Dict[str, Any]) -> Dict[str, Dict[str, str]]:
-    """
-    Load configurations from YAML file data.
+def _parse_args_map(tool_name: str, raw_args: Any) -> dict[str, dict[str, str]]:
+    if not isinstance(raw_args, dict):
+        logging.warning(f"Invalid 'args' for tool '{tool_name}'. Must be a mapping of arg -> string.")
+        return {}
+    parsed: dict[str, dict[str, str]] = {}
+    for arg_name, value in raw_args.items():
+        if isinstance(value, str):
+            parsed[arg_name] = {DESCRIPTION_STRING: value}
+        else:
+            raise ValueError(
+                f"Description for argument '{arg_name}' in tool '{tool_name}' must be a string."
+            )
+    return parsed
 
-    Creates a dict mapping original tool names to their custom configurations.
-    Example: {'ListIndexTool': {'display_name': 'CustomLister', 'description': 'Custom desc'}}
+def _load_config_from_file(config_from_file: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
+    file_configs: dict[str, dict[str, Any]] = {}
+    for tool_name, custom in (config_from_file or {}).items():
+        out: dict[str, Any] = {}
 
-    :param config_from_file: Configuration data from YAML file
-    :return: Dictionary of tool names and their custom configurations
-    """
-    file_configs = {}
-    for original_tool_name, custom_config in config_from_file.items():
-        if original_tool_name not in file_configs:
-            file_configs[original_tool_name] = {}
+        for key, value in (custom or {}).items():
+            if key == ARGS_STRING:
+                if parsed_args := _parse_args_map(tool_name, value):
+                    out.setdefault(ARGS_STRING, {}).update(parsed_args)
+                continue
+            if key in (DISPLAY_NAME_STRING, DESCRIPTION_STRING):
+                out[key] = value
+                continue
+            # Disallow non-standard top-level fields in YAML config
+            raise ValueError(
+                f"Invalid field '{key}' for tool '{tool_name}' in config file. "
+                f"Only '{DISPLAY_NAME_STRING}', '{DESCRIPTION_STRING}' and '{ARGS_STRING}' are supported."
+            )
 
-        # Track which actual fields have been set to detect duplicates
-        set_fields = set()
+        file_configs[tool_name] = out
 
-        for config_key, config_value in custom_config.items():
-            actual_field = _find_actual_field(config_key)
-            if actual_field == DISPLAY_NAME_STRING:
-                if DISPLAY_NAME_STRING in set_fields:
-                    raise ValueError(
-                        f"Duplicate display name field for tool '{original_tool_name}' in config file. "
-                        f'Found multiple aliases: {[k for k, v in custom_config.items() if _find_actual_field(k) == DISPLAY_NAME_STRING]}'
-                    )
-                file_configs[original_tool_name][DISPLAY_NAME_STRING] = config_value
-                set_fields.add(DISPLAY_NAME_STRING)
-            elif actual_field == DESCRIPTION_STRING:
-                if DESCRIPTION_STRING in set_fields:
-                    raise ValueError(
-                        f"Duplicate description field for tool '{original_tool_name}' in config file. "
-                        f'Found multiple aliases: {[k for k, v in custom_config.items() if _find_actual_field(k) == DESCRIPTION_STRING]}'
-                    )
-                file_configs[original_tool_name][DESCRIPTION_STRING] = config_value
-                set_fields.add(DESCRIPTION_STRING)
-            else:
-                logging.warning(
-                    f"Invalid field '{config_key}' for tool '{original_tool_name}' in config file will be ignored. "
-                    f'Only display_name and description are supported.'
-                )
     return file_configs
 
 
-def _check_cli_duplicate_field_aliases(cli_tool_overrides: Dict[str, str], display_name_pattern: str, description_pattern: str) -> None:
+def _put_nested_dict(nested: dict, keys: list[str], value: Any) -> dict:
+    current = nested
+    for key in keys[:-1]:
+        if not isinstance(current.get(key), dict):
+            current[key] = {}
+        current = current[key]
+    # Coerce common scalar types using YAML parser (bool/int/float/null/quoted strings, etc.)
+    if isinstance(value, str) and value.strip():
+        try:
+            coerced = yaml.safe_load(value)
+        except Exception:
+            coerced = value
+    else:
+        coerced = value
+    current[keys[-1]] = coerced
+    return nested
+
+
+def parse_cli_to_nested_config(cli_tool_overrides: Dict[str, str]) -> Dict[str, Dict[str, Any]]:
     """
-    Check for duplicate field aliases in CLI arguments and raise ValueError if found.
-    
-    :param cli_tool_overrides: Command line tool overrides
-    :param display_name_pattern: Regex pattern for display name arguments
-    :param description_pattern: Regex pattern for description arguments
-    :raises ValueError: If duplicate field aliases are found for the same tool
+    Parse generic CLI overrides of the form 'tool.<ToolName>.<path>=<value>' into a nested dict.
+
+    Examples:
+    - tool.ListIndexTool.http_methods=POST
+      -> { 'ListIndexTool': { 'http_methods': 'POST' } }
+
+    - tool.ListIndexTool.args.index.required=true
+      -> { 'ListIndexTool': { 'args': { 'index': { 'required': True } } } }
+
+    :param cli_tool_overrides: Mapping of CLI key -> value
+    :return: Nested overrides per tool name
     """
-    # Collect all arguments by tool and field type to detect duplicates
-    tool_display_name_args = {}  # tool_name -> list of (arg, value)
-    tool_description_args = {}   # tool_name -> list of (arg, value)
-
-    for arg, value in cli_tool_overrides.items():
-        display_name_match = re.match(display_name_pattern, arg)
-        description_match = re.match(description_pattern, arg)
-
-        if display_name_match:
-            original_tool_name = display_name_match.group(1)
-            if original_tool_name not in tool_display_name_args:
-                tool_display_name_args[original_tool_name] = []
-            tool_display_name_args[original_tool_name].append((arg, value))
-        elif description_match:
-            original_tool_name = description_match.group(1)
-            if original_tool_name not in tool_description_args:
-                tool_description_args[original_tool_name] = []
-            tool_description_args[original_tool_name].append((arg, value))
-        else:
-            logging.warning(
-                f"Invalid argument '{arg}' will be ignored. Expected format: tool.<ToolName>.<field>=<value>"
-            )
-
-    # Check for duplicate display name fields
-    for tool_name, args_list in tool_display_name_args.items():
-        if len(args_list) > 1:
-            duplicate_args = [arg for arg, value in args_list]
-            raise ValueError(
-                f"Duplicate display name field for tool '{tool_name}' in CLI arguments. "
-                f'Found multiple aliases: {duplicate_args}'
-            )
-
-    # Check for duplicate description fields
-    for tool_name, args_list in tool_description_args.items():
-        if len(args_list) > 1:
-            duplicate_args = [arg for arg, value in args_list]
-            raise ValueError(
-                f"Duplicate description field for tool '{tool_name}' in CLI arguments. "
-                f'Found multiple aliases: {duplicate_args}'
-            )
-
-
-def _load_config_from_cli(cli_tool_overrides: Dict[str, str]) -> Dict[str, Dict[str, str]]:
-    """
-    Load configurations from CLI arguments.
-
-    Creates a dict mapping original tool names to their custom configurations.
-    Example: {'ListIndexTool': {'display_name': 'CustomLister', 'description': 'Custom desc'}}
-
-    :param cli_tool_overrides: Command line tool overrides
-    :return: Dictionary of tool names and their custom configurations
-    """
-    cli_configs = {}
     if not cli_tool_overrides:
-        return cli_configs
+        return {}
 
-    # Generate regex patterns for display name and description aliases (once)
-    all_display_name_aliases, all_description_aliases = _get_all_aliases()
-    display_name_alias_pattern = '|'.join(re.escape(alias) for alias in all_display_name_aliases)
-    description_alias_pattern = '|'.join(re.escape(alias) for alias in all_description_aliases)
-    display_name_pattern = rf'tool\.(\w+)\.({display_name_alias_pattern})'
-    description_pattern = rf'tool\.(\w+)\.({description_alias_pattern})'
+    nested = {}
+    for full_key, raw_value in cli_tool_overrides.items():
+        nested_keys = [key for key in full_key.split('.') if key != '']
+        if len(nested_keys) < 3 or nested_keys[0] != 'tool':
+            continue
+        # Only allow top-level fields: display_name, description, args
+        top_field = nested_keys[2]
+        if top_field not in (DISPLAY_NAME_STRING, DESCRIPTION_STRING, ARGS_STRING):
+            continue
+        nested = _put_nested_dict(nested, nested_keys[1:], raw_value)
 
-    # Check for duplicate field aliases first
-    _check_cli_duplicate_field_aliases(cli_tool_overrides, display_name_pattern, description_pattern)
+    return nested
 
-    # Apply the configurations
-    for arg, value in cli_tool_overrides.items():
-        display_name_match = re.match(display_name_pattern, arg)
-        description_match = re.match(description_pattern, arg)
-
-        if display_name_match:
-            # Argument format: tool.ListIndexTool.display_name=MyCustomIndexLister
-            original_tool_name = display_name_match.group(1)
-            if original_tool_name not in cli_configs:
-                cli_configs[original_tool_name] = {}
-            cli_configs[original_tool_name][DISPLAY_NAME_STRING] = value
-
-        elif description_match:
-            # Argument format: tool.ListIndexTool.description=MyCustomDescription
-            original_tool_name = description_match.group(1)
-            if original_tool_name not in cli_configs:
-                cli_configs[original_tool_name] = {}
-            cli_configs[original_tool_name][DESCRIPTION_STRING] = value
-
-    return cli_configs
-
-
-def _validate_config(config: Dict[str, Dict[str, str]]) -> None:
+def _validate_config(config: Dict[str, Dict[str, Any]], reference_registry: Dict[str, Any]) -> None:
     """
     Validate the configuration.
 
@@ -214,7 +125,8 @@ def _validate_config(config: Dict[str, Dict[str, str]]) -> None:
     :param config: The configuration to validate
     """
     # Track available tool names (original names minus configured ones)
-    available_tool_names = set(default_tool_registry.keys())
+    # Build available tool names from both reference and default registries
+    available_tool_names = set(default_tool_registry.keys()) | set(reference_registry.keys())
 
     # Validate that all configured tools exist
     for original_name in config.keys():
@@ -241,9 +153,38 @@ def _validate_config(config: Dict[str, Dict[str, str]]) -> None:
                 f"does not follow the required pattern '{DISPLAY_NAME_PATTERN}'."
             )
 
+    # Validate args customizations
+    for original_name, custom_config in config.items():
+        if ARGS_STRING in custom_config:
+            # Prefer registry that contains input_schema properties
+            tool_info_ref = reference_registry.get(original_name)
+            tool_info_def = default_tool_registry.get(original_name)
+            def_has_props = bool((tool_info_def or {}).get('input_schema', {}).get('properties'))
+            ref_has_props = bool((tool_info_ref or {}).get('input_schema', {}).get('properties'))
+            if ref_has_props:
+                tool_info = tool_info_ref
+            elif def_has_props:
+                tool_info = tool_info_def
+            else:
+                tool_info = tool_info_ref or tool_info_def
+            if not tool_info:
+                raise ValueError(f"Tool '{original_name}' is not a valid tool name.")
+            properties = (tool_info.get('input_schema') or {}).get('properties') or {}
+            for arg_name, overrides in custom_config[ARGS_STRING].items():
+                if arg_name not in properties:
+                    raise ValueError(
+                        f"Argument '{arg_name}' does not exist on tool '{original_name}'."
+                    )
+                # Only description supported now
+                desc_val = overrides.get(DESCRIPTION_STRING)
+                if desc_val is not None and not isinstance(desc_val, str):
+                    raise ValueError(
+                        f"Description for argument '{arg_name}' in tool '{original_name}' must be a string."
+                    )
+
 
 def _apply_validated_configs(
-    custom_registry: Dict[str, Any], configs: Dict[str, Dict[str, str]]
+    custom_registry: Dict[str, Any], configs: Dict[str, Dict[str, Any]]
 ) -> None:
     """
     Apply validated configurations to the registry.
@@ -255,8 +196,31 @@ def _apply_validated_configs(
         if original_tool_name not in custom_registry:
             continue
 
+        tool_info = custom_registry[original_tool_name]
+
         for field_name, field_value in custom_config.items():
-            custom_registry[original_tool_name][field_name] = field_value
+            if field_name == ARGS_STRING:
+                # Start from the tool's existing schema, falling back to default registry if missing
+                base_schema = (
+                    tool_info.get('input_schema')
+                    or (default_tool_registry.get(original_tool_name) or {}).get('input_schema')
+                    or {}
+                )
+                input_schema = copy.deepcopy(base_schema)
+                properties = input_schema.get('properties') or {}
+                args_model = tool_info.get('args_model')
+
+                for arg_name, overrides in field_value.items():
+                    if DESCRIPTION_STRING in overrides and arg_name in properties:
+                        properties[arg_name]['description'] = overrides[DESCRIPTION_STRING]
+                        try:
+                            if args_model and hasattr(args_model, 'model_fields') and arg_name in args_model.model_fields:
+                                args_model.model_fields[arg_name].description = overrides[DESCRIPTION_STRING]
+                        except Exception:
+                            pass
+                tool_info['input_schema'] = input_schema
+            else:
+                tool_info[field_name] = field_value
 
 
 def apply_custom_tool_config(
@@ -294,13 +258,13 @@ def apply_custom_tool_config(
         # Use config file and completely ignore CLI
         file_configs = _load_config_from_file(config_from_file)
         if file_configs:
-            _validate_config(file_configs)
+            _validate_config(file_configs, custom_registry)
             _apply_validated_configs(custom_registry, file_configs)
     else:
         # Use CLI arguments only if no config file
-        cli_configs = _load_config_from_cli(cli_tool_overrides)
+        cli_configs = parse_cli_to_nested_config(cli_tool_overrides)
         if cli_configs:
-            _validate_config(cli_configs)
+            _validate_config(cli_configs, custom_registry)
             _apply_validated_configs(custom_registry, cli_configs)
 
     # Update the default registry

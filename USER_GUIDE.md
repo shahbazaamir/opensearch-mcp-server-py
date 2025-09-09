@@ -143,6 +143,8 @@ tools:
   ListIndexTool:
     display_name: "Index Manager"
     description: "List and manage OpenSearch indices with enhanced functionality"
+    args:
+      index: "Custom description for the 'index' argument in ListIndexTool."
   SearchIndexTool:
     display_name: "Super Searcher"
   GetShardsTool:
@@ -514,21 +516,6 @@ export OPENSEARCH_SETTINGS_ALLOW_WRITE=true
 OpenSearch MCP server supports tool customization to modify tool display names, descriptions, and other properties. You can customize tools using either a YAML configuration file or runtime parameters.
 
 **Note:** Display names must follow the pattern `^[a-zA-Z0-9_-]+$` (alphanumeric characters, underscores, and hyphens only).
-
-### Supported Field Aliases
-
-The following field aliases are supported for tool customization:
-
-**Display Name Aliases:**
-- `display_name` (standard)
-- `name`
-- `displayName` 
-- `customName`
-
-**Description Aliases:**
-- `description` (standard)
-- `desc`
-- `customDescription`
 
 ### Configuration Methods
 
