@@ -24,3 +24,5 @@ dist/
 wheels/
 *.egg-info
 /__pycache__
+
+tmp

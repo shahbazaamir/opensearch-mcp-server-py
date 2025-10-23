@@ -59,6 +59,9 @@ uv run python -m mcp_server_opensearch
 # Run streaming server (SSE/HTTP streaming)
 uv run python -m mcp_server_opensearch --transport stream
 
+# Verify using the health endpoint
+curl http://localhost:9900/health
+
 # Run with custom AWS profile
 uv run python -m mcp_server_opensearch --profile my-profile
 ```
